@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Galaxy Gesture Interface</title>
+    <style>
+        :root {
+            --accent: #00f2ff;
+            --glass: rgba(0, 10, 20, 0.6);
+        }
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: radial-gradient(circle at center, #1a2a6c 0%, #b21f1f 30%, #000000 100%);
+            font-family: 'Segoe UI', sans-serif; 
+        }
+        
+        #hud {
+            position: absolute;
+            top: 20px; left: 20px;
+            padding: 20px;
+            background: var(--glass);
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(0, 242, 255, 0.3);
+            border-radius: 15px;
+            color: white;
+            pointer-events: none;
+            transition: opacity 0.5s;
+            z-index: 100;
+        }
+
+        .gesture-badge {
+            display: inline-block;
+            padding: 6px 14px; margin: 5px;
+            border-radius: 20px;
+            background: rgba(0,0,0,0.6);
+            border: 1px solid rgba(255,255,255,0.1);
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            opacity: 0.4;
+        }
+
+        .active-gesture {
+            opacity: 1;
+            border-color: var(--accent);
+            box-shadow: 0 0 20px var(--accent);
+            color: var(--accent);
+            transform: translateY(-5px) scale(1.1);
+        }
+
+        #video-container {
+            position: absolute;
+            bottom: 20px; right: 20px;
+            width: 160px;
+            height: 120px;
+            border-radius: 15px;
+            transform: scaleX(-1);
+            border: 2px solid var(--accent);
+            box-shadow: 0 0 15px rgba(0, 242, 255, 0.4);
+            opacity: 0.7;
+            object-fit: cover;
+        }
+
+        .bar-container { width: 100%; height: 2px; background: rgba(255,255,255,0.1); margin-top: 10px; }
+        #depth-bar { width: 0%; height: 100%; background: var(--accent); transition: width 0.1s; }
+    </style>
+</head>
+<body>
+
+    <div id="hud">
+        <div style="margin-bottom: 10px; display: flex; align-items: center;">
+            <div id="status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #ff4444; margin-right: 10px;"></div>
+            <span id="status-text" style="text-transform: uppercase; letter-spacing: 2px; font-size: 0.65rem; color: #aaa;">Deep Space Scan...</span>
+        </div>
+        
+        <h2 style="margin: 0; font-weight: 300; letter-spacing: 4px; color: var(--accent);">GALAXY ENGINE</h2>
+        <div class="bar-container"><div id="depth-bar"></div></div>
+        
+        <div style="margin-top: 20px;">
+            <div id="badge-flower" class="gesture-badge">NEBULA</div>
+            <div id="badge-saturn" class="gesture-badge">RING SYSTEM</div>
+            <div id="badge-heart" class="gesture-badge">PULSAR</div>
+            <div id="badge-sphere" class="gesture-badge">SINGULARITY</div>
+        </div>
+    </div>
+
+    <video id="input_video" style="display:none"></video>
+    <canvas id="video-container"></canvas>
+
+    <!-- Libraries CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.158.0/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <script>
+        const PARTICLE_COUNT = 12000;
+        let scene, camera, renderer, particles, targets, starfield;
+        let currentShape = 'sphere';
+
+        initThree();
+        initMediaPipe();
+
+        function initThree() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 6;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            const geometry = new THREE.BufferGeometry();
+            const posArray = new Float32Array(PARTICLE_COUNT * 3);
+            targets = new Float32Array(PARTICLE_COUNT * 3);
+            const colorArray = new Float32Array(PARTICLE_COUNT * 3);
+
+            for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+                posArray[i] = (Math.random() - 0.5) * 15;
+                colorArray[i] = Math.random();
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: 0.025,
+                vertexColors: true,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                opacity: 0.8
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+
+            const starGeo = new THREE.BufferGeometry();
+            const starPos = new Float32Array(5000 * 3);
+            for(let i=0; i<15000; i++) starPos[i] = (Math.random() - 0.5) * 100;
+            starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+            starfield = new THREE.Points(starGeo, new THREE.PointsMaterial({color: 0x666666, size: 0.015}));
+            scene.add(starfield);
+
+            animate();
+        }
+
+        function updateUI(shape, depth, isActive) {
+            const hud = document.getElementById('hud');
+            const dot = document.getElementById('status-dot');
+            const statusText = document.getElementById('status-text');
+            const depthBar = document.getElementById('depth-bar');
+
+            hud.style.opacity = isActive ? "1" : "0.5";
+            dot.style.background = isActive ? "#00f2ff" : "#ff4444";
+            statusText.innerText = isActive ? "Hand Linked" : "Scanning Void...";
+            
+            const depthPerc = Math.max(0, Math.min(100, (Math.abs(depth) * 300)));
+            depthBar.style.width = depthPerc + "%";
+
+            document.querySelectorAll('.gesture-badge').forEach(b => b.classList.remove('active-gesture'));
+            if(shape) {
+                const activeBadge = document.getElementById('badge-' + shape);
+                if (activeBadge) activeBadge.classList.add('active-gesture');
+            }
+        }
+
+        function setShape(type) {
+            if (currentShape === type) return;
+            currentShape = type;
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                let x, y, z;
+                const i3 = i * 3;
+                const t = i / PARTICLE_COUNT;
+
+                if (type === 'heart') {
+                    const angle = t * Math.PI * 2;
+                    x = 1.6 * Math.pow(Math.sin(angle), 3);
+                    y = 1.3 * Math.cos(angle) - 0.5 * Math.cos(2 * angle) - 0.2 * Math.cos(3 * angle) - 0.1 * Math.cos(4 * angle);
+                    z = (Math.random() - 0.5) * 0.5;
+                } else if (type === 'saturn') {
+                    if (i < PARTICLE_COUNT * 0.4) {
+                        const phi = Math.acos(-1 + (2 * i) / (PARTICLE_COUNT * 0.4));
+                        const theta = Math.sqrt(PARTICLE_COUNT * 0.4 * Math.PI) * phi;
+                        x = Math.cos(theta) * Math.sin(phi);
+                        y = Math.sin(theta) * Math.sin(phi);
+                        z = Math.cos(phi);
+                    } else {
+                        const angle = Math.random() * Math.PI * 2;
+                        const r = 2.2 + Math.random() * 0.5;
+                        x = Math.cos(angle) * r;
+                        y = (Math.random() - 0.5) * 0.15;
+                        z = Math.sin(angle) * r;
+                    }
+                } else if (type === 'flower') {
+                    const angle = t * Math.PI * 18;
+                    const r = Math.cos(5 * angle) * 2.5;
+                    x = Math.cos(angle) * r;
+                    y = Math.sin(angle) * r;
+                    z = (Math.random() - 0.5) * 0.3;
+                } else {
+                    const phi = Math.acos(-1 + (2 * i) / PARTICLE_COUNT);
+                    const theta = Math.sqrt(PARTICLE_COUNT * Math.PI) * phi;
+                    x = Math.cos(theta) * Math.sin(phi) * 2;
+                    y = Math.sin(theta) * Math.sin(phi) * 2;
+                    z = Math.cos(phi) * 2;
+                }
+                targets[i3] = x; targets[i3+1] = y; targets[i3+2] = z;
+            }
+        }
+
+        function initMediaPipe() {
+            const videoElement = document.getElementById('input_video');
+            const canvasElement = document.getElementById('video-container');
+            const canvasCtx = canvasElement.getContext('2d');
+
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+            
+            hands.setOptions({ 
+                maxNumHands: 1, 
+                modelComplexity: 1, 
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.5
+            });
+            
+            hands.onResults((results) => {
+                if (canvasElement.width !== videoElement.videoWidth || canvasElement.height !== videoElement.videoHeight) {
+                    canvasElement.width = videoElement.videoWidth || 640;
+                    canvasElement.height = videoElement.videoHeight || 480;
+                }
+
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                if (results.image) {
+                    canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+                }
+                canvasCtx.restore();
+
+                const hasHand = results.multiHandLandmarks && results.multiHandLandmarks.length > 0;
+                if (hasHand) {
+                    const hand = results.multiHandLandmarks[0];
+                    particles.position.x = (hand[8].x - 0.5) * -12;
+                    particles.position.y = (hand[8].y - 0.5) * -12;
+
+                    const isPinch = Math.hypot(hand[8].x - hand[4].x, hand[8].y - hand[4].y) < 0.04;
+                    const isPoint = hand[8].y < hand[6].y && hand[12].y > hand[10].y;
+                    const isFist = hand[8].y > hand[6].y && hand[12].y > hand[10].y && hand[16].y > hand[14].y;
+
+                    let shape = 'flower';
+                    if (isPinch) shape = 'heart';
+                    else if (isPoint) shape = 'saturn';
+                    else if (isFist) shape = 'sphere';
+
+                    setShape(shape);
+                    updateUI(shape, hand[0].z, true);
+                    
+                    const hue = (hand[0].x + 0.5) % 1;
+                    particles.material.color.setHSL(hue, 0.8, 0.6);
+                } else {
+                    updateUI(null, 0, false);
+                }
+            });
+
+            const cam = new Camera(videoElement, {
+                onFrame: async () => { 
+                    await hands.send({ image: videoElement }); 
+                },
+                width: 640, 
+                height: 480
+            });
+            
+            cam.start().catch(err => {
+                console.error("Camera failed to start:", err);
+                document.getElementById('status-text').innerText = "Camera Error";
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const pos = particles.geometry.attributes.position.array;
+            for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+                pos[i] += (targets[i] - pos[i]) * 0.1;
+            }
+            particles.geometry.attributes.position.needsUpdate = true;
+            
+            particles.rotation.y += 0.002;
+            starfield.rotation.y -= 0.0003;
+            starfield.rotation.z += 0.0001;
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
